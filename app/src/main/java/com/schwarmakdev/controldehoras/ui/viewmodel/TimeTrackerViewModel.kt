@@ -1,0 +1,519 @@
+package com.schwarmakdev.controldehoras.ui.viewmodel
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.schwarmakdev.controldehoras.NetworkMonitor
+import com.schwarmakdev.controldehoras.NotificationHelper
+import com.schwarmakdev.controldehoras.data.database.AppDatabase
+import com.schwarmakdev.controldehoras.data.entity.OfflineAction
+import com.schwarmakdev.controldehoras.data.entity.Proyecto
+import com.schwarmakdev.controldehoras.data.entity.SesionTiempo
+import com.schwarmakdev.controldehoras.data.entity.TemporizadorActivo
+import com.schwarmakdev.controldehoras.data.repository.PreferencesRepository
+import com.schwarmakdev.controldehoras.data.repository.TimeTrackerRepository
+import com.schwarmakdev.controldehoras.ui.theme.AppThemeColor
+import com.schwarmakdev.controldehoras.ui.theme.ThemeState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
+
+data class OverlapConflict(
+    val proyectoNombre: String,
+    val horaInicioStr: String,
+    val horaFinStr: String
+)
+
+class TimeTrackerViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val database = AppDatabase.getDatabase(application)
+    private val repository = TimeTrackerRepository(
+        database.projectDao(),
+        database.timeSessionDao(),
+        database.activeTimerDao(),
+        database.offlineActionDao()
+    )
+    private val prefs = PreferencesRepository(application)
+
+    // ── Proyectos y sesiones ────────────────────────────────────────────────────
+
+    val projects: StateFlow<List<Proyecto>> = repository.allProjects
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val sessions: StateFlow<List<SesionTiempo>> = repository.allSessions
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeTimer: StateFlow<TemporizadorActivo?> = repository.activeTimerFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val offlineQueue: StateFlow<List<OfflineAction>> = repository.offlineActionsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // ── Temporizador UI ─────────────────────────────────────────────────────────
+
+    private val _timerSeconds = MutableStateFlow(0L)
+    val timerSeconds: StateFlow<Long> = _timerSeconds.asStateFlow()
+
+    private val _antiOlvidoTriggered = MutableStateFlow(false)
+    val antiOlvidoTriggered: StateFlow<Boolean> = _antiOlvidoTriggered.asStateFlow()
+
+    private val _overlapError = MutableStateFlow<String?>(null)
+    val overlapError: StateFlow<String?> = _overlapError.asStateFlow()
+
+    // ── Red — detectada automáticamente ────────────────────────────────────────
+
+    val onlineMode: StateFlow<Boolean> = NetworkMonitor.observe(application)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    private val _syncMessage = MutableStateFlow<String?>(null)
+    val syncMessage: StateFlow<String?> = _syncMessage.asStateFlow()
+
+    // ── Notificaciones — persistidas en DataStore ───────────────────────────────
+
+    val notificationsEnabled: StateFlow<Boolean> = prefs.notificationsEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val notificationHoursThreshold: StateFlow<Int> = prefs.notificationHoursThreshold
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 5)
+
+    // ── Sesión en edición ────────────────────────────────────────────────────────
+
+    private val _editingSession = MutableStateFlow<SesionTiempo?>(null)
+    val editingSession: StateFlow<SesionTiempo?> = _editingSession.asStateFlow()
+
+    private var notificationAlertSent = false
+    private var tickerJob: Job? = null
+
+    init {
+        viewModelScope.launch {
+            repository.checkAndPrepopulate()
+            // Restaurar tema desde DataStore al arrancar
+            prefs.isDarkMode.first().also    { ThemeState.isDark          = it }
+            prefs.colorTheme.first().also    { ThemeState.currentColorTheme = it }
+            observeActiveTimer()
+            observeNetwork()
+        }
+    }
+
+    // ── Red ─────────────────────────────────────────────────────────────────────
+
+    private fun observeNetwork() {
+        viewModelScope.launch {
+            var wasOffline = false
+            onlineMode.collect { isOnline ->
+                if (isOnline && wasOffline) {
+                    processOfflineQueue()
+                }
+                wasOffline = !isOnline
+            }
+        }
+    }
+
+    // ── Timer ────────────────────────────────────────────────────────────────────
+
+    private fun observeActiveTimer() {
+        viewModelScope.launch {
+            repository.activeTimerFlow.collect { timer ->
+                if (timer != null && timer.estado == "corriendo") {
+                    startTicker(timer)
+                } else {
+                    stopTicker()
+                    _timerSeconds.value = timer?.tiempoAcumuladoAntesPausa ?: 0L
+                }
+            }
+        }
+    }
+
+    private fun startTicker(timer: TemporizadorActivo) {
+        tickerJob?.cancel()
+        notificationAlertSent = false
+        tickerJob = viewModelScope.launch {
+            while (isActive) {
+                val deltaSecs = (System.currentTimeMillis() - timer.timestampInicio) / 1000
+                val totalSecs = timer.tiempoAcumuladoAntesPausa + deltaSecs
+
+                if (totalSecs >= 43200) {
+                    _antiOlvidoTriggered.value = true
+                    pauseTimerInternal()
+                    break
+                }
+
+                val threshold = notificationHoursThreshold.value * 3600L
+                if (notificationsEnabled.value && totalSecs >= threshold && !notificationAlertSent) {
+                    notificationAlertSent = true
+                    val pr = projects.value.find { it.id == timer.proyectoId }
+                    NotificationHelper.sendActiveTimerAlert(
+                        getApplication(),
+                        pr?.nombre ?: "Trabajo",
+                        "${notificationHoursThreshold.value} horas"
+                    )
+                }
+
+                _timerSeconds.value = totalSecs
+                delay(1000)
+            }
+        }
+    }
+
+    private fun stopTicker() { tickerJob?.cancel(); tickerJob = null }
+
+    // ── Preferencias (persisten en DataStore) ────────────────────────────────────
+
+    fun setDarkMode(isDark: Boolean) {
+        ThemeState.isDark = isDark
+        viewModelScope.launch { prefs.setDarkMode(isDark) }
+    }
+
+    fun setColorTheme(theme: AppThemeColor) {
+        ThemeState.currentColorTheme = theme
+        viewModelScope.launch { prefs.setColorTheme(theme) }
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setNotificationsEnabled(enabled) }
+    }
+
+    fun setNotificationHoursThreshold(hours: Int) {
+        viewModelScope.launch { prefs.setNotificationHoursThreshold(hours) }
+    }
+
+    fun triggerManualNotificationPreview() {
+        viewModelScope.launch {
+            val timer = repository.getActiveTimer()
+            val pr    = if (timer != null) projects.value.find { it.id == timer.proyectoId } else null
+            NotificationHelper.sendActiveTimerAlert(
+                getApplication(),
+                pr?.nombre ?: "Trabajo",
+                "de prueba (más de ${notificationHoursThreshold.value} horas)"
+            )
+        }
+    }
+
+    fun dismissAntiOlvido()  { _antiOlvidoTriggered.value = false }
+    fun clearOverlapError()  { _overlapError.value = null }
+
+    // ── Cola offline ─────────────────────────────────────────────────────────────
+
+    private suspend fun processOfflineQueue() {
+        val queue = repository.getAllOfflineActions()
+        if (queue.isEmpty()) return
+
+        _syncMessage.value = "Sincronizando ${queue.size} acciones offline..."
+        delay(1000)
+
+        for (action in queue) {
+            when (action.type) {
+                "START"  -> action.dataJson.jsonString("projectId")?.let { startTimerInternal(it) }
+                "PAUSE"  -> pauseTimerInternal()
+                "RESUME" -> resumeTimerInternal()
+                "SAVE"   -> stopAndSaveTimerInternal(action.dataJson.jsonString("notas") ?: "")
+                "MANUAL" -> {
+                    val pId    = action.dataJson.jsonString("projectId") ?: continue
+                    val tStart = action.dataJson.jsonLong("tStart") ?: continue
+                    val tEnd   = action.dataJson.jsonLong("tEnd") ?: continue
+                    val dMin   = action.dataJson.jsonInt("dMin") ?: 1
+                    val notes  = action.dataJson.jsonString("notes") ?: ""
+                    repository.insertSession(
+                        SesionTiempo(
+                            id = UUID.randomUUID().toString(),
+                            proyectoId = pId, fecha = formatDate(tStart),
+                            horaInicio = tStart, horaFin = tEnd,
+                            duracionMinutos = dMin, notas = notes,
+                            metodoRegistro = "manual"
+                        )
+                    )
+                }
+            }
+            repository.deleteOfflineAction(action)
+        }
+        _syncMessage.value = "¡Sincronización completada!"
+        delay(2500)
+        _syncMessage.value = null
+    }
+
+    // ── Acciones del temporizador ────────────────────────────────────────────────
+
+    fun startTimer(projectId: String) {
+        viewModelScope.launch {
+            if (!onlineMode.value) enqueueOffline("START", mapOf("projectId" to projectId))
+            startTimerInternal(projectId)
+        }
+    }
+
+    private suspend fun startTimerInternal(projectId: String) {
+        repository.saveActiveTimer(
+            TemporizadorActivo(
+                proyectoId = projectId,
+                timestampInicio = System.currentTimeMillis(),
+                estado = "corriendo",
+                tiempoAcumuladoAntesPausa = 0L
+            )
+        )
+    }
+
+    fun pauseTimer() {
+        viewModelScope.launch {
+            if (!onlineMode.value) enqueueOffline("PAUSE", emptyMap())
+            pauseTimerInternal()
+        }
+    }
+
+    private suspend fun pauseTimerInternal() {
+        val timer = repository.getActiveTimer() ?: return
+        if (timer.estado == "corriendo") {
+            val delta = (System.currentTimeMillis() - timer.timestampInicio) / 1000
+            repository.saveActiveTimer(
+                timer.copy(
+                    estado = "pausado",
+                    tiempoAcumuladoAntesPausa = timer.tiempoAcumuladoAntesPausa + delta,
+                    timestampInicio = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun resumeTimer() {
+        viewModelScope.launch {
+            if (!onlineMode.value) enqueueOffline("RESUME", emptyMap())
+            resumeTimerInternal()
+        }
+    }
+
+    private suspend fun resumeTimerInternal() {
+        val timer = repository.getActiveTimer() ?: return
+        if (timer.estado == "pausado") {
+            repository.saveActiveTimer(
+                timer.copy(estado = "corriendo", timestampInicio = System.currentTimeMillis())
+            )
+        }
+    }
+
+    fun stopAndSaveTimer(notas: String, onFinished: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            if (!onlineMode.value) enqueueOffline("SAVE", mapOf("notas" to notas))
+            onFinished(stopAndSaveTimerInternal(notas))
+        }
+    }
+
+    private suspend fun stopAndSaveTimerInternal(notas: String): Boolean {
+        val timer = repository.getActiveTimer() ?: return false
+        val delta = if (timer.estado == "corriendo")
+            (System.currentTimeMillis() - timer.timestampInicio) / 1000 else 0L
+        val totalSecs  = timer.tiempoAcumuladoAntesPausa + delta
+        val horaFin    = System.currentTimeMillis()
+        val horaInicio = horaFin - totalSecs * 1000
+
+        val overlap = checkOverlap(horaInicio, horaFin, excludeId = null)
+        if (overlap != null) {
+            _overlapError.value =
+                "Conflicto: El temporizador se solapa con '${overlap.proyectoNombre}' de ${overlap.horaInicioStr} a ${overlap.horaFinStr}."
+            return false
+        }
+
+        repository.insertSession(
+            SesionTiempo(
+                id = UUID.randomUUID().toString(),
+                proyectoId = timer.proyectoId,
+                fecha = formatDate(horaInicio),
+                horaInicio = horaInicio, horaFin = horaFin,
+                duracionMinutos = (totalSecs / 60).toInt().coerceAtLeast(1),
+                notas = notas.ifBlank { "Sesión del temporizador" },
+                metodoRegistro = "temporizador"
+            )
+        )
+        repository.deleteActiveTimer()
+        _overlapError.value = null
+        return true
+    }
+
+    fun deleteSession(session: SesionTiempo) {
+        viewModelScope.launch { repository.deleteSession(session) }
+    }
+
+    fun discardTimer() {
+        viewModelScope.launch { repository.deleteActiveTimer(); _timerSeconds.value = 0 }
+    }
+
+    // ── Edición de sesiones ──────────────────────────────────────────────────────
+
+    fun startEditSession(session: SesionTiempo) { _editingSession.value = session }
+    fun cancelEditSession()                      { _editingSession.value = null }
+
+    fun saveEditedSession(
+        original: SesionTiempo,
+        startHour: Int, startMinute: Int,
+        endHour: Int,   endMinute: Int,
+        notas: String,
+        onComplete: (String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val startMillis = buildMillis(original.horaInicio, startHour, startMinute)
+            val endMillis   = buildMillis(original.horaInicio, endHour, endMinute)
+
+            if (endMillis <= startMillis) {
+                onComplete("La hora de fin debe ser posterior a la de inicio.")
+                return@launch
+            }
+
+            val overlap = checkOverlap(startMillis, endMillis, excludeId = original.id)
+            if (overlap != null) {
+                _overlapError.value =
+                    "Conflicto al editar: se solapa con '${overlap.proyectoNombre}'."
+                onComplete("Se solapa con '${overlap.proyectoNombre}'.")
+                return@launch
+            }
+
+            val updated = original.copy(
+                horaInicio       = startMillis,
+                horaFin          = endMillis,
+                duracionMinutos  = ((endMillis - startMillis) / 60000).toInt().coerceAtLeast(1),
+                notas            = notas.ifBlank { original.notas },
+                fecha            = formatDate(startMillis)
+            )
+            repository.deleteSession(original)
+            repository.insertSession(updated)
+            _editingSession.value = null
+            _overlapError.value   = null
+            onComplete(null)
+        }
+    }
+
+    // ── Sesión manual ────────────────────────────────────────────────────────────
+
+    fun addManualSession(
+        projectId: String,
+        dateMillis: Long,
+        startHour: Int,   startMinute: Int,
+        endHour: Int,     endMinute: Int,
+        notas: String,
+        onComplete: (String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val startMillis = buildMillis(dateMillis, startHour, startMinute)
+            val endMillis   = buildMillis(dateMillis, endHour, endMinute)
+
+            if (endMillis <= startMillis) {
+                onComplete("La hora de fin debe ser posterior a la de inicio.")
+                return@launch
+            }
+
+            val overlap = checkOverlap(startMillis, endMillis, excludeId = null)
+            if (overlap != null) {
+                _overlapError.value =
+                    "Conflicto: Ya existe actividad en '${overlap.proyectoNombre}' de ${overlap.horaInicioStr} a ${overlap.horaFinStr}."
+                onComplete("Se solapa con '${overlap.proyectoNombre}'.")
+                return@launch
+            }
+
+            val durationMin = ((endMillis - startMillis) / 60000).toInt()
+            if (!onlineMode.value) {
+                enqueueOffline("MANUAL", mapOf(
+                    "projectId" to projectId,
+                    "tStart" to startMillis,
+                    "tEnd" to endMillis,
+                    "dMin" to durationMin,
+                    "notes" to notas
+                ))
+            }
+
+            repository.insertSession(
+                SesionTiempo(
+                    id = UUID.randomUUID().toString(),
+                    proyectoId = projectId,
+                    fecha = formatDate(startMillis),
+                    horaInicio = startMillis, horaFin = endMillis,
+                    duracionMinutos = durationMin,
+                    notas = notas.ifBlank { if (onlineMode.value) "Registro manual" else "Registro manual [Offline]" },
+                    metodoRegistro = "manual"
+                )
+            )
+            _overlapError.value = null
+            onComplete(null)
+        }
+    }
+
+    // ── Proyectos ────────────────────────────────────────────────────────────────
+
+    fun addNewProject(nombre: String, descripcion: String, metaHoras: Double) {
+        viewModelScope.launch {
+            repository.insertProject(
+                Proyecto(
+                    id = UUID.randomUUID().toString(),
+                    nombre = nombre, descripcion = descripcion,
+                    horasMetaGlobal = metaHoras, activo = true
+                )
+            )
+        }
+    }
+
+    fun toggleProjectActive(project: Proyecto) {
+        viewModelScope.launch { repository.updateProject(project.copy(activo = !project.activo)) }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────────
+
+    /**
+     * @param excludeId ID de sesión a ignorar (para edición — no comparar consigo misma).
+     */
+    private suspend fun checkOverlap(
+        startMillis: Long,
+        endMillis: Long,
+        excludeId: String?
+    ): OverlapConflict? {
+        val projectsMap = projects.value.associateBy { it.id }
+        // Leer directamente desde la fuente, sin crear flows extra
+        val allSessions = repository.allSessions.first()
+
+        for (session in allSessions) {
+            if (session.id == excludeId) continue
+            if (startMillis < session.horaFin && endMillis > session.horaInicio) {
+                return OverlapConflict(
+                    proyectoNombre = projectsMap[session.proyectoId]?.nombre ?: "Desconocido",
+                    horaInicioStr  = formatTime(session.horaInicio),
+                    horaFinStr     = formatTime(session.horaFin)
+                )
+            }
+        }
+        return null
+    }
+
+    private fun enqueueOffline(type: String, data: Map<String, Any>) {
+        viewModelScope.launch {
+            val json = JSONObject(data.mapValues { it.value.toString() }).toString()
+            repository.enqueueOfflineAction(OfflineAction(type = type, dataJson = json))
+        }
+    }
+
+    private fun buildMillis(dateMillis: Long, hour: Int, minute: Int): Long =
+        java.util.Calendar.getInstance().apply {
+            timeInMillis = dateMillis
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, minute)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+    fun formatDate(millis: Long): String =
+        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(millis))
+
+    fun formatTime(millis: Long): String =
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(millis))
+}
+
+// ── JSON helpers ──────────────────────────────────────────────────────────────
+
+private fun String.jsonString(key: String): String? = try { JSONObject(this).getString(key) } catch (_: Exception) { null }
+private fun String.jsonLong(key: String): Long?     = try { JSONObject(this).getLong(key)   } catch (_: Exception) { null }
+private fun String.jsonInt(key: String): Int?       = try { JSONObject(this).getInt(key)    } catch (_: Exception) { null }

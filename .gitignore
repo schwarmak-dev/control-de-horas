@@ -1,0 +1,23 @@
+# Android
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Carpeta build de cada módulo
+app/build/
+build/
+
+# Reporte de problemas (generado automáticamente)
+build/reports/
+
+# Kotlin cache
+.kotlin/
+
+# Gradle wrapper jar (opcional, algunos lo incluyen)
+gradle/wrapper/gradle-wrapper.jar
