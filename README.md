@@ -11,6 +11,12 @@
 
 ---
 
+![Android](https://img.shields.io/badge/Android-8.0+-3DDC84?style=flat-square&logo=android&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF?style=flat-square&logo=kotlin&logoColor=white)
+![Jetpack Compose](https://img.shields.io/badge/Jetpack_Compose-Material3-4285F4?style=flat-square&logo=jetpackcompose&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+![Release](https://img.shields.io/github/v/release/schwarmak-dev/control-de-horas?style=flat-square&color=blue)
+
 ## 📱 Descarga directa
 
 > **[⬇️ Descargar APK (v1.2.0)](https://github.com/schwarmak-dev/control-de-horas/releases/latest)**
