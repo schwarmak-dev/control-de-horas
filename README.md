@@ -3,11 +3,6 @@
 > App Android nativa para el registro preciso de horas de trabajo, práctica profesional y actividades académicas.
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Android-26%2B-brightgreen?logo=android" />
-  <img src="https://img.shields.io/badge/Kotlin-2.0-blueviolet?logo=kotlin" />
-  <img src="https://img.shields.io/badge/Jetpack%20Compose-✓-blue?logo=jetpack-compose" />
-  <img src="https://img.shields.io/badge/License-MIT-yellow" />
-</p>
 
 ---
 
