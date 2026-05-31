@@ -353,14 +353,17 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun saveEditedSession(
         original: SesionTiempo,
+        projectId: String,
+        startDateMillis: Long,
+        endDateMillis: Long,
         startHour: Int, startMinute: Int,
         endHour: Int,   endMinute: Int,
         notas: String,
         onComplete: (String?) -> Unit
     ) {
         viewModelScope.launch {
-            val startMillis = buildMillis(original.horaInicio, startHour, startMinute)
-            val endMillis   = buildMillis(original.horaInicio, endHour, endMinute)
+            val startMillis = buildMillis(startDateMillis, startHour, startMinute)
+            val endMillis   = buildMillis(endDateMillis, endHour, endMinute)
 
             if (endMillis <= startMillis) {
                 onComplete("La hora de fin debe ser posterior a la de inicio.")
@@ -376,6 +379,7 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
             }
 
             val updated = original.copy(
+                proyectoId       = projectId,
                 horaInicio       = startMillis,
                 horaFin          = endMillis,
                 duracionMinutos  = ((endMillis - startMillis) / 60000).toInt().coerceAtLeast(1),
@@ -394,15 +398,16 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun addManualSession(
         projectId: String,
-        dateMillis: Long,
+        startDateMillis: Long,
+        endDateMillis: Long,
         startHour: Int,   startMinute: Int,
         endHour: Int,     endMinute: Int,
         notas: String,
         onComplete: (String?) -> Unit
     ) {
         viewModelScope.launch {
-            val startMillis = buildMillis(dateMillis, startHour, startMinute)
-            val endMillis   = buildMillis(dateMillis, endHour, endMinute)
+            val startMillis = buildMillis(startDateMillis, startHour, startMinute)
+            val endMillis   = buildMillis(endDateMillis, endHour, endMinute)
 
             if (endMillis <= startMillis) {
                 onComplete("La hora de fin debe ser posterior a la de inicio.")

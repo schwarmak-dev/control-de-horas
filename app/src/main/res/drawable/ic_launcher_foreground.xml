@@ -3,7 +3,32 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Círculo exterior del reloj -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,54m-32,0a32,32 0,1 1,64 0a32,32 0,1 1,-64 0" />
+
+    <!-- Manecilla de las horas -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M54,54L54,38" />
+
+    <!-- Manecilla de los minutos -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M54,54L68,54" />
+
+    <!-- Punto central -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M31,63.928c0,0 6.4,-2.3 13,-2.3c6.6,0 13,2.3 13,2.3l0,-0.928c0,-0.067 -0.054,-0.121 -0.121,-0.121l-25.758,0c-0.067,0 -0.121,0.054 -0.121,0.121l0,0.928z" />
+        android:pathData="M54,54m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
 </vector>

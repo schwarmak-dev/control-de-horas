@@ -42,7 +42,6 @@ fun TrackingScreen(
 ) {
     val context        = LocalContext.current
     val activeProjects = projects.filter { it.activo }
-    val editingSession by viewModel.editingSession.collectAsStateWithLifecycle()
 
     var selectedProjectForTimerId by remember { mutableStateOf("") }
     if (selectedProjectForTimerId.isEmpty() && activeProjects.isNotEmpty())
@@ -54,14 +53,16 @@ fun TrackingScreen(
 
     // ── Estado fecha/hora con pickers ─────────────────────────────────────────
     val now = Calendar.getInstance()
-    var selectedDateMillis by remember { mutableLongStateOf(now.timeInMillis) }
+    var selectedStartDateMillis by remember { mutableLongStateOf(now.timeInMillis) }
+    var selectedEndDateMillis   by remember { mutableLongStateOf(now.timeInMillis) }
     var startHour  by remember { mutableIntStateOf(9)  }
     var startMin   by remember { mutableIntStateOf(0)  }
     var endHour    by remember { mutableIntStateOf(17) }
     var endMin     by remember { mutableIntStateOf(0)  }
     var manualNotes by remember { mutableStateOf("") }
 
-    var showDatePicker      by remember { mutableStateOf(false) }
+    var showStartDatePicker by remember { mutableStateOf(false) }
+    var showEndDatePicker   by remember { mutableStateOf(false) }
     var showStartTimePicker by remember { mutableStateOf(false) }
     var showEndTimePicker   by remember { mutableStateOf(false) }
     var isSecurityAlertVisible by remember { mutableStateOf(true) }
@@ -71,26 +72,27 @@ fun TrackingScreen(
     val timeFmt = SimpleDateFormat("HH:mm",      Locale.getDefault())
     fun fmtTime(h: Int, m: Int) = String.format(Locale.getDefault(), "%02d:%02d", h, m)
 
-    // ── DatePicker dialog ─────────────────────────────────────────────────────
-    if (showDatePicker) {
-        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = selectedDateMillis)
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    datePickerState.selectedDateMillis?.let { selectedDateMillis = it }
-                    showDatePicker = false
-                }) { Text("Aceptar", color = PrimaryEmerald) }
+    // ── DatePicker inicio ─────────────────────────────────────────────────────
+    if (showStartDatePicker) {
+        AppDatePickerDialog(
+            selectedDateMillis = selectedStartDateMillis,
+            onDateSelected = { startMillis ->
+                selectedStartDateMillis = startMillis
+                selectedEndDateMillis = startMillis
             },
-            dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) {
-                    Text("Cancelar", color = TextSubtleGray)
-                }
+            onDismiss = { showStartDatePicker = false }
+        )
+    }
+
+    // ── DatePicker fin ────────────────────────────────────────────────────────
+    if (showEndDatePicker) {
+        AppDatePickerDialog(
+            selectedDateMillis = selectedEndDateMillis,
+            onDateSelected = { endMillis ->
+                selectedEndDateMillis = endMillis
             },
-            colors = DatePickerDefaults.colors(containerColor = DarkSurface)
-        ) {
-            DatePicker(state = datePickerState)
-        }
+            onDismiss = { showEndDatePicker = false }
+        )
     }
 
     // ── TimePicker inicio ─────────────────────────────────────────────────────
@@ -99,7 +101,12 @@ fun TrackingScreen(
         TimePickerDialog(
             title  = "Hora de inicio",
             onDismiss = { showStartTimePicker = false },
-            onConfirm = { startHour = tpState.hour; startMin = tpState.minute; showStartTimePicker = false }
+            onConfirm = {
+                startHour = tpState.hour
+                startMin = tpState.minute
+                showStartTimePicker = false
+                showEndTimePicker = true
+            }
         ) { TimePicker(state = tpState) }
     }
 
@@ -111,15 +118,6 @@ fun TrackingScreen(
             onDismiss = { showEndTimePicker = false },
             onConfirm = { endHour = tpState.hour; endMin = tpState.minute; showEndTimePicker = false }
         ) { TimePicker(state = tpState) }
-    }
-
-    // ── Edit session dialog ───────────────────────────────────────────────────
-    if (editingSession != null) {
-        EditSessionDialog(
-            session  = editingSession!!,
-            projects = projects,
-            viewModel = viewModel
-        )
     }
 
     LazyColumn(
@@ -288,21 +286,45 @@ fun TrackingScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // ── Fecha ──────────────────────────────────────────────
-                        Text("Fecha", fontSize = 12.sp, color = TextSubtleGray)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedButton(
-                            onClick  = { showDatePicker = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape    = RoundedCornerShape(12.dp),
-                            border   = BorderStroke(1.dp, ContentBorder.copy(alpha = 0.5f)),
-                            colors   = ButtonDefaults.outlinedButtonColors(contentColor = TextCrispWhite)
-                        ) {
-                            Icon(Icons.Default.CalendarToday, null,
-                                tint = PrimaryEmerald, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(dateFmt.format(Date(selectedDateMillis)),
-                                fontWeight = FontWeight.SemiBold, color = TextCrispWhite)
+                        // ── Fecha inicio / fin ──────────────────────────────────
+                        Row(modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Fecha inicio", fontSize = 12.sp, color = TextSubtleGray)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                OutlinedButton(
+                                    onClick  = { showStartDatePicker = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape    = RoundedCornerShape(12.dp),
+                                    border   = BorderStroke(1.dp, ContentBorder.copy(alpha = 0.5f)),
+                                    colors   = ButtonDefaults.outlinedButtonColors(contentColor = TextCrispWhite)
+                                ) {
+                                    Icon(Icons.Default.CalendarToday, null,
+                                        tint = PrimaryEmerald, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(dateFmt.format(Date(selectedStartDateMillis)),
+                                        fontWeight = FontWeight.SemiBold, color = TextCrispWhite, fontSize = 12.sp)
+                                }
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Fecha fin", fontSize = 12.sp, color = TextSubtleGray)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                OutlinedButton(
+                                    onClick  = { showEndDatePicker = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape    = RoundedCornerShape(12.dp),
+                                    border   = BorderStroke(1.dp, ContentBorder.copy(alpha = 0.5f)),
+                                    colors   = ButtonDefaults.outlinedButtonColors(contentColor = TextCrispWhite)
+                                ) {
+                                    Icon(Icons.Default.CalendarToday, null,
+                                        tint = PrimaryEmerald, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(dateFmt.format(Date(selectedEndDateMillis)),
+                                        fontWeight = FontWeight.SemiBold, color = TextCrispWhite, fontSize = 12.sp)
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -362,13 +384,14 @@ fun TrackingScreen(
                             modifier = Modifier.fillMaxWidth().testTag("save_manual_button"),
                             onClick  = {
                                 viewModel.addManualSession(
-                                    projectId   = manualProjectSelectedId,
-                                    dateMillis  = selectedDateMillis,
-                                    startHour   = startHour,
-                                    startMinute = startMin,
-                                    endHour     = endHour,
-                                    endMinute   = endMin,
-                                    notas       = manualNotes
+                                    projectId         = manualProjectSelectedId,
+                                    startDateMillis   = selectedStartDateMillis,
+                                    endDateMillis     = selectedEndDateMillis,
+                                    startHour         = startHour,
+                                    startMinute       = startMin,
+                                    endHour           = endHour,
+                                    endMinute         = endMin,
+                                    notas             = manualNotes
                                 ) { error ->
                                     if (error != null)
                                         Toast.makeText(context, error, Toast.LENGTH_LONG).show()
@@ -419,6 +442,55 @@ fun TimePickerDialog(
     )
 }
 
+// ── DatePickerDialog wrapper ──────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppDatePickerDialog(
+    selectedDateMillis: Long,
+    onDateSelected: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val initialDateUtc = remember(selectedDateMillis) {
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = selectedDateMillis }
+        java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+            set(java.util.Calendar.YEAR, cal.get(java.util.Calendar.YEAR))
+            set(java.util.Calendar.MONTH, cal.get(java.util.Calendar.MONTH))
+            set(java.util.Calendar.DAY_OF_MONTH, cal.get(java.util.Calendar.DAY_OF_MONTH))
+        }.timeInMillis
+    }
+    val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialDateUtc)
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                datePickerState.selectedDateMillis?.let { utcMillis ->
+                    val calUtc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = utcMillis }
+                    val localCal = java.util.Calendar.getInstance().apply {
+                        set(java.util.Calendar.YEAR, calUtc.get(java.util.Calendar.YEAR))
+                        set(java.util.Calendar.MONTH, calUtc.get(java.util.Calendar.MONTH))
+                        set(java.util.Calendar.DAY_OF_MONTH, calUtc.get(java.util.Calendar.DAY_OF_MONTH))
+                        set(java.util.Calendar.HOUR_OF_DAY, 0)
+                        set(java.util.Calendar.MINUTE, 0)
+                        set(java.util.Calendar.SECOND, 0)
+                        set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                    onDateSelected(localCal.timeInMillis)
+                }
+                onDismiss()
+            }) { Text("Aceptar", color = PrimaryEmerald) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancelar", color = TextSubtleGray)
+            }
+        },
+        colors = DatePickerDefaults.colors(containerColor = DarkSurface)
+    ) {
+        DatePicker(state = datePickerState)
+    }
+}
+
 // ── Edit session dialog ───────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -429,23 +501,52 @@ fun EditSessionDialog(
     viewModel: TimeTrackerViewModel
 ) {
     val context    = LocalContext.current
-    val projectName = projects.find { it.id == session.proyectoId }?.nombre ?: "Proyecto"
 
     val initCal = Calendar.getInstance().apply { timeInMillis = session.horaInicio }
     val endCal  = Calendar.getInstance().apply { timeInMillis = session.horaFin   }
 
-    var editHourStart by remember { mutableIntStateOf(initCal.get(Calendar.HOUR_OF_DAY)) }
-    var editMinStart  by remember { mutableIntStateOf(initCal.get(Calendar.MINUTE)) }
-    var editHourEnd   by remember { mutableIntStateOf(endCal.get(Calendar.HOUR_OF_DAY)) }
-    var editMinEnd    by remember { mutableIntStateOf(endCal.get(Calendar.MINUTE)) }
-    var editNotes     by remember { mutableStateOf(session.notas) }
-    var showStartTP   by remember { mutableStateOf(false) }
-    var showEndTP     by remember { mutableStateOf(false) }
+    var editProjectId       by remember { mutableStateOf(session.proyectoId) }
+    var editStartDateMillis by remember { mutableLongStateOf(session.horaInicio) }
+    var editEndDateMillis   by remember { mutableLongStateOf(session.horaFin) }
+    var editHourStart       by remember { mutableIntStateOf(initCal.get(Calendar.HOUR_OF_DAY)) }
+    var editMinStart        by remember { mutableIntStateOf(initCal.get(Calendar.MINUTE)) }
+    var editHourEnd         by remember { mutableIntStateOf(endCal.get(Calendar.HOUR_OF_DAY)) }
+    var editMinEnd          by remember { mutableIntStateOf(endCal.get(Calendar.MINUTE)) }
+    var editNotes           by remember { mutableStateOf(session.notas) }
+    
+    var showStartDP         by remember { mutableStateOf(false) }
+    var showEndDP           by remember { mutableStateOf(false) }
+    var showStartTP         by remember { mutableStateOf(false) }
+    var showEndTP           by remember { mutableStateOf(false) }
 
+    if (showStartDP) {
+        AppDatePickerDialog(
+            selectedDateMillis = editStartDateMillis,
+            onDateSelected = { startMillis ->
+                editStartDateMillis = startMillis
+                editEndDateMillis = startMillis
+            },
+            onDismiss = { showStartDP = false }
+        )
+    }
+    if (showEndDP) {
+        AppDatePickerDialog(
+            selectedDateMillis = editEndDateMillis,
+            onDateSelected = { endMillis ->
+                editEndDateMillis = endMillis
+            },
+            onDismiss = { showEndDP = false }
+        )
+    }
     if (showStartTP) {
         val tpState = rememberTimePickerState(editHourStart, editMinStart)
         TimePickerDialog("Hora inicio", { showStartTP = false },
-            { editHourStart = tpState.hour; editMinStart = tpState.minute; showStartTP = false }
+            {
+                editHourStart = tpState.hour
+                editMinStart = tpState.minute
+                showStartTP = false
+                showEndTP = true
+            }
         ) { TimePicker(state = tpState) }
     }
     if (showEndTP) {
@@ -466,14 +567,47 @@ fun EditSessionDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Proyecto: $projectName", color = SecondaryMint,
-                    fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                Text("Fecha: ${session.fecha}", color = TextSubtleGray, fontSize = 12.sp)
+                Text("Proyecto", fontSize = 12.sp, color = TextSubtleGray)
+                ProjectDropdown(
+                    projects   = projects,
+                    selectedId = editProjectId,
+                    onSelect   = { editProjectId = it }
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                val dateFmt = remember { SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()) }
 
                 Row(modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Inicio", fontSize = 11.sp, color = TextSubtleGray)
+                        Text("Fecha inicio", fontSize = 11.sp, color = TextSubtleGray)
+                        OutlinedButton(onClick = { showStartDP = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, ContentBorder.copy(alpha = 0.5f)),
+                            colors = ButtonDefaults.outlinedButtonColors()) {
+                            Text(dateFmt.format(Date(editStartDateMillis)),
+                                color = TextCrispWhite, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Fecha fin", fontSize = 11.sp, color = TextSubtleGray)
+                        OutlinedButton(onClick = { showEndDP = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, ContentBorder.copy(alpha = 0.5f)),
+                            colors = ButtonDefaults.outlinedButtonColors()) {
+                            Text(dateFmt.format(Date(editEndDateMillis)),
+                                color = TextCrispWhite, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Hora inicio", fontSize = 11.sp, color = TextSubtleGray)
                         OutlinedButton(onClick = { showStartTP = true },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp),
@@ -484,7 +618,7 @@ fun EditSessionDialog(
                         }
                     }
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Fin", fontSize = 11.sp, color = TextSubtleGray)
+                        Text("Hora fin", fontSize = 11.sp, color = TextSubtleGray)
                         OutlinedButton(onClick = { showEndTP = true },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp),
@@ -517,10 +651,13 @@ fun EditSessionDialog(
             Button(
                 onClick = {
                     viewModel.saveEditedSession(
-                        original    = session,
-                        startHour   = editHourStart, startMinute = editMinStart,
-                        endHour     = editHourEnd,   endMinute   = editMinEnd,
-                        notas       = editNotes
+                        original         = session,
+                        projectId        = editProjectId,
+                        startDateMillis  = editStartDateMillis,
+                        endDateMillis    = editEndDateMillis,
+                        startHour        = editHourStart, startMinute = editMinStart,
+                        endHour          = editHourEnd,   endMinute   = editMinEnd,
+                        notas            = editNotes
                     ) { error ->
                         if (error != null)
                             Toast.makeText(context, error, Toast.LENGTH_LONG).show()

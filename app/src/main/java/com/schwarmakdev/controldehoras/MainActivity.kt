@@ -67,6 +67,7 @@ fun TimeTrackerApp(
     val syncMessage      by viewModel.syncMessage.collectAsStateWithLifecycle()
     val antiOlvido       by viewModel.antiOlvidoTriggered.collectAsStateWithLifecycle()
     val overlapError     by viewModel.overlapError.collectAsStateWithLifecycle()
+    val editingSession   by viewModel.editingSession.collectAsStateWithLifecycle()
 
     LaunchedEffect(syncMessage) {
         if (!syncMessage.isNullOrEmpty()) {
@@ -199,6 +200,15 @@ fun TimeTrackerApp(
                 }
             },
             onDismiss = { showStopDialog = false }
+        )
+    }
+
+    // ── Edit session dialog ───────────────────────────────────────────────────
+    if (editingSession != null) {
+        EditSessionDialog(
+            session  = editingSession!!,
+            projects = projects,
+            viewModel = viewModel
         )
     }
 
