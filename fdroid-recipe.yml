@@ -1,0 +1,43 @@
+# Recipe for F-Droid
+# Copy this file to: fdroiddata/metadata/com.schwarmakdev.controldehoras.app.yml
+# See: https://gitlab.com/fdroid/fdroiddata
+
+Categories:
+  - Productivity
+  - Time
+
+License: MIT
+AuthorName: Matias Gonzalez
+AuthorEmail: schwarmak.dev@gmail.com
+SourceCode: https://github.com/schwarmak-dev/control-de-horas
+IssueTracker: https://github.com/schwarmak-dev/control-de-horas/issues
+
+AutoName: Control de Horas
+Summary: App Android de control de horas para trabajo y practica profesional
+Description: |
+  App Android nativa para el registro preciso de horas de
+  trabajo, practica profesional y actividades academicas.
+
+  Incluye temporizador activo con proteccion anti-olvido,
+  registro manual retroactivo, edicion de sesiones, dashboard
+  de estadisticas, calendario mensual, exportacion CSV/PDF,
+  modo offline con cola de sincronizacion, 6 colores de acento
+  y modo oscuro/claro.
+
+  No requiere Google Play Services.
+
+RepoType: git
+Repo: https://github.com/schwarmak-dev/control-de-horas.git
+
+Builds:
+  - versionName: 1.3.0
+    versionCode: 4
+    commit: v1.3.0
+    subdir: app
+    gradle:
+      - release
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 1.3.0
+CurrentVersionCode: 4

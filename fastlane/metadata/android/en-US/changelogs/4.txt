@@ -1,0 +1,11 @@
+- Temporizador optimizado con proteccion anti-olvido (auto-pausa a las 12h)
+- Soporte para turnos nocturnos (fechas inicio/fin independientes)
+- Flujo de ingreso de horas mas rapido
+- Edicion completa de sesiones (incluye cambio de proyecto)
+- Control inteligente de solapamientos de horarios
+- Cola offline 100% persistente en base de datos
+- Dashboard dinamico con estadisticas
+- Calendario mensual
+- Exportacion CSV y PDF
+- 6 temas de color y modo oscuro/claro persistente
+- Nuevo icono oficial

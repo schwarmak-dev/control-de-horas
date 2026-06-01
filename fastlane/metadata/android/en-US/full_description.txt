@@ -1,0 +1,16 @@
+Control de Horas es una app Android nativa para el registro preciso de horas de trabajo, practica profesional y actividades academicas.
+
+Caracteristicas principales:
+- Temporizador activo con pausa, reanudacion y proteccion anti-olvido (auto-pausa a las 12h)
+- Registro manual retroactivo con DatePicker y TimePicker nativos
+- Edicion completa de sesiones guardadas
+- Dashboard de estadisticas con progreso hacia metas, grafico de distribucion e historial
+- Calendario mensual con marcadores de actividad
+- Exportacion CSV (Excel) y PDF imprimible con espacio para firma de supervisor
+- 6 colores de acento y modo oscuro/claro persistido automaticamente
+- Modo offline real con cola de sincronizacion automatica al reconectar
+- Notificaciones configurables anti-olvido
+- Soporte para turnos nocturnos con fechas de inicio y fin independientes
+- Control inteligente de solapamientos de horarios
+
+No requiere Google Play Services. Licencia MIT.
