@@ -138,7 +138,7 @@ fun CalendarScreen(
             Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = DarkSurface.copy(alpha = 0.5f))) {
                 Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(PrimaryEmerald))
-                    Text("Días con horas guardadas en la base de datos.", fontSize = 12.sp, color = TextSubtleGray)
+                    Text("Los días guardados están aquí", fontSize = 12.sp, color = TextSubtleGray)
                 }
             }
         }

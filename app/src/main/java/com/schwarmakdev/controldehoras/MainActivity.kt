@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -36,12 +35,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         NotificationHelper.createNotificationChannel(this)
-        enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
                 Scaffold(
                     modifier             = Modifier.fillMaxSize(),
-                    contentWindowInsets  = WindowInsets.safeDrawing
+                    containerColor       = DarkBackground,
+                    contentWindowInsets  = WindowInsets(0)
                 ) { innerPadding ->
                     TimeTrackerApp(modifier = Modifier.padding(innerPadding))
                 }
@@ -88,7 +87,11 @@ fun TimeTrackerApp(
     }
     val showBanner = !onlineMode || now < bannerUntil
 
-    Column(modifier = modifier.fillMaxSize().background(DarkBackground)) {
+    Column(modifier = modifier
+        .fillMaxSize()
+        .background(DarkBackground)
+        .statusBarsPadding()
+    ) {
 
         // ── Header ─────────────────────────────────────────────────────────────
         Row(

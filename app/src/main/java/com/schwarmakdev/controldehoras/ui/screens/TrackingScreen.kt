@@ -2,9 +2,12 @@ package com.schwarmakdev.controldehoras.ui.screens
 
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -23,6 +27,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.schwarmakdev.controldehoras.data.entity.Proyecto
 import com.schwarmakdev.controldehoras.data.entity.SesionTiempo
 import com.schwarmakdev.controldehoras.data.entity.TemporizadorActivo
@@ -31,7 +37,7 @@ import com.schwarmakdev.controldehoras.ui.viewmodel.TimeTrackerViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun TrackingScreen(
     projects: List<Proyecto>,
@@ -120,8 +126,20 @@ fun TrackingScreen(
         ) { TimePicker(state = tpState) }
     }
 
+    // Inset dinámico: navBar cuando keyboard cerrado, keyboard cuando abierto
+    val bottomInset = WindowInsets.safeDrawing
+        .only(WindowInsetsSides.Bottom)
+        .asPaddingValues()
+        .calculateBottomPadding()
+
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp).imePadding(),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start  = 16.dp,
+            end    = 16.dp,
+            top    = 16.dp,
+            bottom = 16.dp + bottomInset  // se agranda cuando el keyboard sube
+        ),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // ── Timer card ────────────────────────────────────────────────────────
@@ -269,7 +287,7 @@ fun TrackingScreen(
                 border = BorderStroke(1.dp, ContentBorder.copy(alpha = 0.3f)),
                 shape  = RoundedCornerShape(20.dp)) {
                 Column(modifier = Modifier.padding(18.dp)) {
-                    Text("AÑADIR SESIÓN RETROACTIVA (MANUAL)", fontSize = 13.sp,
+                    Text("Añadir una sesión manual", fontSize = 13.sp,
                         fontWeight = FontWeight.Bold, color = SecondaryMint, letterSpacing = 1.sp)
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -371,42 +389,60 @@ fun TrackingScreen(
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
-                        AppTextField(
-                            value         = manualNotes,
-                            label         = "Actividad desarrollada / Notas",
-                            placeholder   = "Describa brevemente la tarea...",
-                            modifier      = Modifier.fillMaxWidth(),
-                            onValueChange = { manualNotes = it }
-                        )
 
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Button(
-                            modifier = Modifier.fillMaxWidth().testTag("save_manual_button"),
-                            onClick  = {
-                                viewModel.addManualSession(
-                                    projectId         = manualProjectSelectedId,
-                                    startDateMillis   = selectedStartDateMillis,
-                                    endDateMillis     = selectedEndDateMillis,
-                                    startHour         = startHour,
-                                    startMinute       = startMin,
-                                    endHour           = endHour,
-                                    endMinute         = endMin,
-                                    notas             = manualNotes
-                                ) { error ->
-                                    if (error != null)
-                                        Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-                                    else {
-                                        Toast.makeText(context, "¡Sesión guardada!", Toast.LENGTH_SHORT).show()
-                                        manualNotes = ""
-                                    }
+                        // ── TextField + Botón juntos (scroll ambos cuando keyboard abre) ──
+                        val bringIntoViewRequester = remember { BringIntoViewRequester() }
+                        val coroutineScope = rememberCoroutineScope()
+
+                        Box(modifier = Modifier.bringIntoViewRequester(bringIntoViewRequester)) {
+                            Column {
+                                AppTextField(
+                                    value         = manualNotes,
+                                    label         = "Describa brevemente",
+                                    placeholder   = "Describa brevemente la tarea...",
+                                    modifier      = Modifier
+                                        .fillMaxWidth()
+                                        .onFocusChanged { focusState ->
+                                            if (focusState.isFocused) {
+                                                coroutineScope.launch {
+                                                    delay(300) // esperar animación del keyboard
+                                                    bringIntoViewRequester.bringIntoView()
+                                                }
+                                            }
+                                        },
+                                    onValueChange = { manualNotes = it }
+                                )
+
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Button(
+                                    modifier = Modifier.fillMaxWidth().testTag("save_manual_button"),
+                                    onClick  = {
+                                        viewModel.addManualSession(
+                                            projectId         = manualProjectSelectedId,
+                                            startDateMillis   = selectedStartDateMillis,
+                                            endDateMillis     = selectedEndDateMillis,
+                                            startHour         = startHour,
+                                            startMinute       = startMin,
+                                            endHour           = endHour,
+                                            endMinute         = endMin,
+                                            notas             = manualNotes
+                                        ) { error ->
+                                            if (error != null)
+                                                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                            else {
+                                                Toast.makeText(context, "¡Sesión guardada!", Toast.LENGTH_SHORT).show()
+                                                manualNotes = ""
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryEmerald)
+                                ) {
+                                    Icon(Icons.Default.Add, null, tint = ButtonContentColor)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Guardar Sesión Manual",
+                                        color = ButtonContentColor, fontWeight = FontWeight.Bold)
                                 }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryEmerald)
-                        ) {
-                            Icon(Icons.Default.Add, null, tint = ButtonContentColor)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Guardar Sesión Manual",
-                                color = ButtonContentColor, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
