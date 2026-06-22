@@ -30,6 +30,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import com.schwarmakdev.controldehoras.ui.screens.*
 import com.schwarmakdev.controldehoras.ui.theme.*
 import com.schwarmakdev.controldehoras.ui.viewmodel.TimeTrackerViewModel
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,29 +64,30 @@ fun TimeTrackerApp(
     val activeTimer      by viewModel.activeTimer.collectAsStateWithLifecycle()
     val timerSeconds     by viewModel.timerSeconds.collectAsStateWithLifecycle()
     val onlineMode       by viewModel.onlineMode.collectAsStateWithLifecycle()   // automático
-    val syncMessage      by viewModel.syncMessage.collectAsStateWithLifecycle()
     val antiOlvido       by viewModel.antiOlvidoTriggered.collectAsStateWithLifecycle()
     val overlapError     by viewModel.overlapError.collectAsStateWithLifecycle()
     val editingSession   by viewModel.editingSession.collectAsStateWithLifecycle()
 
-    LaunchedEffect(syncMessage) {
-        if (!syncMessage.isNullOrEmpty()) {
-            Toast.makeText(context, syncMessage, Toast.LENGTH_SHORT).show()
-        }
-    }
-
     var showStopDialog by remember { mutableStateOf(false) }
     var stopNotes      by remember { mutableStateOf("") }
 
-    // Banner de conexión — solo aparece cuando cambia el estado
+    // Banner de conexión:
+    //  - Sin conexión  → visible de forma permanente.
+    //  - Reconexión    → muestra "En línea ✓" durante 3,5 s y se oculta solo.
+    var showBanner by remember { mutableStateOf(false) }
     var prevOnline by remember { mutableStateOf<Boolean?>(null) }
-    var bannerUntil by remember { mutableLongStateOf(0L) }
-    val now = System.currentTimeMillis()
     LaunchedEffect(onlineMode) {
-        if (prevOnline != null && prevOnline != onlineMode) bannerUntil = now + 3500L
+        val changed = prevOnline != null && prevOnline != onlineMode
         prevOnline = onlineMode
+        when {
+            !onlineMode -> showBanner = true            // offline: siempre visible
+            changed     -> {                            // volvió la conexión
+                showBanner = true
+                delay(3500)
+                showBanner = false
+            }
+        }
     }
-    val showBanner = !onlineMode || now < bannerUntil
 
     Column(modifier = modifier
         .fillMaxSize()

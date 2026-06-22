@@ -5,8 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.schwarmakdev.controldehoras.NetworkMonitor
 import com.schwarmakdev.controldehoras.NotificationHelper
+import com.schwarmakdev.controldehoras.TimerService
 import com.schwarmakdev.controldehoras.data.database.AppDatabase
-import com.schwarmakdev.controldehoras.data.entity.OfflineAction
 import com.schwarmakdev.controldehoras.data.entity.Proyecto
 import com.schwarmakdev.controldehoras.data.entity.SesionTiempo
 import com.schwarmakdev.controldehoras.data.entity.TemporizadorActivo
@@ -24,7 +24,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,8 +41,7 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     private val repository = TimeTrackerRepository(
         database.projectDao(),
         database.timeSessionDao(),
-        database.activeTimerDao(),
-        database.offlineActionDao()
+        database.activeTimerDao()
     )
     private val prefs = PreferencesRepository(application)
 
@@ -57,9 +55,6 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
 
     val activeTimer: StateFlow<TemporizadorActivo?> = repository.activeTimerFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
-
-    val offlineQueue: StateFlow<List<OfflineAction>> = repository.offlineActionsFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // ── Temporizador UI ─────────────────────────────────────────────────────────
 
@@ -77,9 +72,6 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     val onlineMode: StateFlow<Boolean> = NetworkMonitor.observe(application)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
-    private val _syncMessage = MutableStateFlow<String?>(null)
-    val syncMessage: StateFlow<String?> = _syncMessage.asStateFlow()
-
     // ── Notificaciones — persistidas en DataStore ───────────────────────────────
 
     val notificationsEnabled: StateFlow<Boolean> = prefs.notificationsEnabled
@@ -93,7 +85,6 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     private val _editingSession = MutableStateFlow<SesionTiempo?>(null)
     val editingSession: StateFlow<SesionTiempo?> = _editingSession.asStateFlow()
 
-    private var notificationAlertSent = false
     private var tickerJob: Job? = null
 
     init {
@@ -103,21 +94,6 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
             prefs.isDarkMode.first().also    { ThemeState.isDark          = it }
             prefs.colorTheme.first().also    { ThemeState.currentColorTheme = it }
             observeActiveTimer()
-            observeNetwork()
-        }
-    }
-
-    // ── Red ─────────────────────────────────────────────────────────────────────
-
-    private fun observeNetwork() {
-        viewModelScope.launch {
-            var wasOffline = false
-            onlineMode.collect { isOnline ->
-                if (isOnline && wasOffline) {
-                    processOfflineQueue()
-                }
-                wasOffline = !isOnline
-            }
         }
     }
 
@@ -128,9 +104,14 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
             repository.activeTimerFlow.collect { timer ->
                 if (timer != null && timer.estado == "corriendo") {
                     startTicker(timer)
+                    // Mantiene el temporizador vivo en segundo plano + notificación
+                    TimerService.start(getApplication())
                 } else {
                     stopTicker()
                     _timerSeconds.value = timer?.tiempoAcumuladoAntesPausa ?: 0L
+                    // El servicio se auto-detiene al observar la BD, pero lo paramos
+                    // de inmediato para liberar la notificación sin demora.
+                    TimerService.stop(getApplication())
                 }
             }
         }
@@ -138,27 +119,18 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun startTicker(timer: TemporizadorActivo) {
         tickerJob?.cancel()
-        notificationAlertSent = false
         tickerJob = viewModelScope.launch {
             while (isActive) {
                 val deltaSecs = (System.currentTimeMillis() - timer.timestampInicio) / 1000
                 val totalSecs = timer.tiempoAcumuladoAntesPausa + deltaSecs
 
+                // Anti-olvido a las 12 h: muestra el diálogo (con la app abierta) y
+                // pausa. La alerta de notificación y la pausa en segundo plano las
+                // gestiona TimerService.
                 if (totalSecs >= 43200) {
                     _antiOlvidoTriggered.value = true
                     pauseTimerInternal()
                     break
-                }
-
-                val threshold = notificationHoursThreshold.value * 3600L
-                if (notificationsEnabled.value && totalSecs >= threshold && !notificationAlertSent) {
-                    notificationAlertSent = true
-                    val pr = projects.value.find { it.id == timer.proyectoId }
-                    NotificationHelper.sendActiveTimerAlert(
-                        getApplication(),
-                        pr?.nombre ?: "Trabajo",
-                        "${notificationHoursThreshold.value} horas"
-                    )
                 }
 
                 _timerSeconds.value = totalSecs
@@ -204,52 +176,14 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     fun dismissAntiOlvido()  { _antiOlvidoTriggered.value = false }
     fun clearOverlapError()  { _overlapError.value = null }
 
-    // ── Cola offline ─────────────────────────────────────────────────────────────
-
-    private suspend fun processOfflineQueue() {
-        val queue = repository.getAllOfflineActions()
-        if (queue.isEmpty()) return
-
-        _syncMessage.value = "Sincronizando ${queue.size} acciones offline..."
-        delay(1000)
-
-        for (action in queue) {
-            when (action.type) {
-                "START"  -> action.dataJson.jsonString("projectId")?.let { startTimerInternal(it) }
-                "PAUSE"  -> pauseTimerInternal()
-                "RESUME" -> resumeTimerInternal()
-                "SAVE"   -> stopAndSaveTimerInternal(action.dataJson.jsonString("notas") ?: "")
-                "MANUAL" -> {
-                    val pId    = action.dataJson.jsonString("projectId") ?: continue
-                    val tStart = action.dataJson.jsonLong("tStart") ?: continue
-                    val tEnd   = action.dataJson.jsonLong("tEnd") ?: continue
-                    val dMin   = action.dataJson.jsonInt("dMin") ?: 1
-                    val notes  = action.dataJson.jsonString("notes") ?: ""
-                    repository.insertSession(
-                        SesionTiempo(
-                            id = UUID.randomUUID().toString(),
-                            proyectoId = pId, fecha = formatDate(tStart),
-                            horaInicio = tStart, horaFin = tEnd,
-                            duracionMinutos = dMin, notas = notes,
-                            metodoRegistro = "manual"
-                        )
-                    )
-                }
-            }
-            repository.deleteOfflineAction(action)
-        }
-        _syncMessage.value = "¡Sincronización completada!"
-        delay(2500)
-        _syncMessage.value = null
-    }
-
     // ── Acciones del temporizador ────────────────────────────────────────────────
+    //
+    // El almacenamiento es 100% local (Room), por lo que cada acción se persiste
+    // directamente una sola vez. No existe cola de reproducción offline: encolar y
+    // ejecutar a la vez duplicaba las sesiones al reconectar.
 
     fun startTimer(projectId: String) {
-        viewModelScope.launch {
-            if (!onlineMode.value) enqueueOffline("START", mapOf("projectId" to projectId))
-            startTimerInternal(projectId)
-        }
+        viewModelScope.launch { startTimerInternal(projectId) }
     }
 
     private suspend fun startTimerInternal(projectId: String) {
@@ -264,10 +198,7 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun pauseTimer() {
-        viewModelScope.launch {
-            if (!onlineMode.value) enqueueOffline("PAUSE", emptyMap())
-            pauseTimerInternal()
-        }
+        viewModelScope.launch { pauseTimerInternal() }
     }
 
     private suspend fun pauseTimerInternal() {
@@ -285,10 +216,7 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun resumeTimer() {
-        viewModelScope.launch {
-            if (!onlineMode.value) enqueueOffline("RESUME", emptyMap())
-            resumeTimerInternal()
-        }
+        viewModelScope.launch { resumeTimerInternal() }
     }
 
     private suspend fun resumeTimerInternal() {
@@ -301,10 +229,7 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun stopAndSaveTimer(notas: String, onFinished: (Boolean) -> Unit = {}) {
-        viewModelScope.launch {
-            if (!onlineMode.value) enqueueOffline("SAVE", mapOf("notas" to notas))
-            onFinished(stopAndSaveTimerInternal(notas))
-        }
+        viewModelScope.launch { onFinished(stopAndSaveTimerInternal(notas)) }
     }
 
     private suspend fun stopAndSaveTimerInternal(notas: String): Boolean {
@@ -423,15 +348,6 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
             }
 
             val durationMin = ((endMillis - startMillis) / 60000).toInt()
-            if (!onlineMode.value) {
-                enqueueOffline("MANUAL", mapOf(
-                    "projectId" to projectId,
-                    "tStart" to startMillis,
-                    "tEnd" to endMillis,
-                    "dMin" to durationMin,
-                    "notes" to notas
-                ))
-            }
 
             repository.insertSession(
                 SesionTiempo(
@@ -440,7 +356,7 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
                     fecha = formatDate(startMillis),
                     horaInicio = startMillis, horaFin = endMillis,
                     duracionMinutos = durationMin,
-                    notas = notas.ifBlank { if (onlineMode.value) "Registro manual" else "Registro manual [Offline]" },
+                    notas = notas.ifBlank { "Registro manual" },
                     metodoRegistro = "manual"
                 )
             )
@@ -494,13 +410,6 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
         return null
     }
 
-    private fun enqueueOffline(type: String, data: Map<String, Any>) {
-        viewModelScope.launch {
-            val json = JSONObject(data.mapValues { it.value.toString() }).toString()
-            repository.enqueueOfflineAction(OfflineAction(type = type, dataJson = json))
-        }
-    }
-
     private fun buildMillis(dateMillis: Long, hour: Int, minute: Int): Long =
         java.util.Calendar.getInstance().apply {
             timeInMillis = dateMillis
@@ -516,9 +425,3 @@ class TimeTrackerViewModel(application: Application) : AndroidViewModel(applicat
     fun formatTime(millis: Long): String =
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(millis))
 }
-
-// ── JSON helpers ──────────────────────────────────────────────────────────────
-
-private fun String.jsonString(key: String): String? = try { JSONObject(this).getString(key) } catch (_: Exception) { null }
-private fun String.jsonLong(key: String): Long?     = try { JSONObject(this).getLong(key)   } catch (_: Exception) { null }
-private fun String.jsonInt(key: String): Int?       = try { JSONObject(this).getInt(key)    } catch (_: Exception) { null }

@@ -1,5 +1,9 @@
 package com.schwarmakdev.controldehoras.ui.screens
 
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -22,6 +26,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.schwarmakdev.controldehoras.PdfExporter
 import com.schwarmakdev.controldehoras.data.entity.Proyecto
@@ -36,18 +44,46 @@ fun ConfigurationScreen(
     viewModel: TimeTrackerViewModel
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     val notificationsEnabled       by viewModel.notificationsEnabled.collectAsStateWithLifecycle()
     val notificationHoursThreshold by viewModel.notificationHoursThreshold.collectAsStateWithLifecycle()
 
+    // Permiso real del sistema (POST_NOTIFICATIONS). En < Android 13 no se requiere.
+    fun hasNotificationPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        else true
+
+    var permissionGranted by remember { mutableStateOf(hasNotificationPermission()) }
+
+    // Reverifica el permiso al volver de los ajustes del sistema (puede cambiar fuera de la app).
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) permissionGranted = hasNotificationPermission()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // "Notificaciones activas" solo si el usuario las activó Y el sistema da permiso.
+    val effectiveNotificationsEnabled = notificationsEnabled && permissionGranted
+
     val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        viewModel.setNotificationsEnabled(isGranted)
+        permissionGranted = isGranted
+        // El launcher solo se dispara al intentar ACTIVAR, así que conservamos la
+        // intención del usuario. Si denegó, el aviso + botón de ajustes lo guiarán
+        // (evita la trampa de la denegación permanente que deja el switch inservible).
+        viewModel.setNotificationsEnabled(true)
         Toast.makeText(
             context,
-            if (isGranted) "¡Permiso concedido!" else "Permiso denegado. Las alertas no aparecerán.",
-            Toast.LENGTH_SHORT
+            if (isGranted) "¡Permiso concedido!"
+            else "Permiso denegado. Actívalo en los ajustes del sistema para recibir alertas.",
+            Toast.LENGTH_LONG
         ).show()
     }
 
@@ -288,22 +324,64 @@ fun ConfigurationScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Recordatorio anti-olvido", color = TextCrispWhite,
                                 fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(if (notificationsEnabled) "Habilitadas" else "Desactivadas",
-                                color = TextSubtleGray, fontSize = 11.sp)
+                            Text(
+                                when {
+                                    effectiveNotificationsEnabled              -> "Habilitadas"
+                                    notificationsEnabled && !permissionGranted -> "Sin permiso del sistema"
+                                    else                                       -> "Desactivadas"
+                                },
+                                color = if (notificationsEnabled && !permissionGranted) Color(0xFFFBBF24) else TextSubtleGray,
+                                fontSize = 11.sp
+                            )
                         }
                         Switch(
-                            checked         = notificationsEnabled,
+                            checked         = effectiveNotificationsEnabled,
                             onCheckedChange = { enabled ->
-                                if (enabled && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                                    permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                if (enabled) {
+                                    when {
+                                        permissionGranted -> viewModel.setNotificationsEnabled(true)
+                                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                                            permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                        else -> viewModel.setNotificationsEnabled(true)
+                                    }
                                 } else {
-                                    viewModel.setNotificationsEnabled(enabled)
+                                    viewModel.setNotificationsEnabled(false)
                                 }
                             }
                         )
                     }
 
-                    if (notificationsEnabled) {
+                    // Aviso cuando el usuario quiere notificaciones pero el sistema las bloquea.
+                    if (notificationsEnabled && !permissionGranted) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, null, tint = Color(0xFFFBBF24),
+                                modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Las notificaciones están bloqueadas en los ajustes del sistema. " +
+                                "No recibirás recordatorios.",
+                                color = TextSubtleGray, fontSize = 11.sp, lineHeight = 15.sp,
+                                modifier = Modifier.weight(1f))
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors   = ButtonDefaults.buttonColors(containerColor = PanelBlue),
+                            shape    = RoundedCornerShape(12.dp),
+                            onClick  = {
+                                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                context.startActivity(intent)
+                            }
+                        ) {
+                            Icon(Icons.Default.Settings, null, tint = PrimaryEmerald)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Abrir ajustes de notificaciones", color = TextCrispWhite,
+                                fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        }
+                    }
+
+                    if (effectiveNotificationsEnabled) {
                         Spacer(modifier = Modifier.height(16.dp))
                         HorizontalDivider(color = ContentBorder.copy(alpha = 0.2f))
                         Spacer(modifier = Modifier.height(16.dp))

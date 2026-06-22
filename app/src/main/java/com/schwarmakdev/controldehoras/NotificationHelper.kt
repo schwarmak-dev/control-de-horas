@@ -12,6 +12,11 @@ object NotificationHelper {
     private const val CHANNEL_NAME = "Recordatorios de Registro"
     private const val NOTIFICATION_ID = 5005
 
+    // Canal y notificación persistente del temporizador en ejecución (foreground service)
+    const val RUNNING_CHANNEL_ID  = "time_tracker_running"
+    private const val RUNNING_CHANNEL_NAME = "Temporizador en ejecución"
+    const val ONGOING_NOTIFICATION_ID = 5006
+
     fun createNotificationChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -26,28 +31,66 @@ object NotificationHelper {
         }
     }
 
-    fun sendActiveTimerAlert(context: Context, projectName: String, hoursText: String) {
-        createNotificationChannel(context)
+    /** Canal silencioso (IMPORTANCE_LOW) para la notificación continua del cronómetro. */
+    fun createRunningChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                RUNNING_CHANNEL_ID,
+                RUNNING_CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Muestra el tiempo del temporizador mientras está activo"
+                setShowBadge(false)
+            }
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(channel)
+        }
+    }
 
-        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        else
-            PendingIntent.FLAG_UPDATE_CURRENT
-
-        val pendingIntent = PendingIntent.getActivity(
+    private fun openAppIntent(context: Context): PendingIntent {
+        // minSdk 26 ≥ M, por lo que FLAG_IMMUTABLE siempre está disponible.
+        return PendingIntent.getActivity(
             context, 0,
             Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             },
-            pendingIntentFlags
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+    }
+
+    /**
+     * Notificación persistente con cronómetro nativo. El sistema actualiza el conteo
+     * automáticamente a partir de [baseTimeMillis] (= instante en que el contador
+     * marcaría 00:00), sin necesidad de refrescarla cada segundo.
+     */
+    fun buildRunningNotification(
+        context: Context,
+        projectName: String,
+        baseTimeMillis: Long
+    ): android.app.Notification {
+        createRunningChannel(context)
+        return androidx.core.app.NotificationCompat.Builder(context, RUNNING_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Cronometrando: $projectName")
+            .setContentText("Temporizador activo. Toca para abrir la app.")
+            .setWhen(baseTimeMillis)
+            .setUsesChronometer(true)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(openAppIntent(context))
+            .build()
+    }
+
+    fun sendActiveTimerAlert(context: Context, projectName: String, hoursText: String) {
+        createNotificationChannel(context)
 
         val notification = androidx.core.app.NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("¿Sigues trabajando en $projectName?")
             .setContentText("Tu temporizador lleva activo $hoursText. Recuerda apagarlo si ya terminaste.")
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(openAppIntent(context))
             .setAutoCancel(true)
             .build()
 

@@ -1,10 +1,8 @@
 package com.schwarmakdev.controldehoras.data.repository
 
 import com.schwarmakdev.controldehoras.data.dao.ActiveTimerDao
-import com.schwarmakdev.controldehoras.data.dao.OfflineActionDao
 import com.schwarmakdev.controldehoras.data.dao.ProjectDao
 import com.schwarmakdev.controldehoras.data.dao.TimeSessionDao
-import com.schwarmakdev.controldehoras.data.entity.OfflineAction
 import com.schwarmakdev.controldehoras.data.entity.Proyecto
 import com.schwarmakdev.controldehoras.data.entity.SesionTiempo
 import com.schwarmakdev.controldehoras.data.entity.TemporizadorActivo
@@ -15,8 +13,7 @@ import java.util.UUID
 class TimeTrackerRepository(
     private val projectDao: ProjectDao,
     private val timeSessionDao: TimeSessionDao,
-    private val activeTimerDao: ActiveTimerDao,
-    private val offlineActionDao: OfflineActionDao
+    private val activeTimerDao: ActiveTimerDao
 ) {
     val allProjects: Flow<List<Proyecto>> = projectDao.getAllProjects()
     val allSessions: Flow<List<SesionTiempo>> = timeSessionDao.getAllSessions()
@@ -62,15 +59,12 @@ class TimeTrackerRepository(
     // ──────────────────────────────────────────────
     suspend fun insertProject(proyecto: Proyecto) = projectDao.insertProject(proyecto)
     suspend fun updateProject(proyecto: Proyecto) = projectDao.updateProject(proyecto)
-    suspend fun deleteProject(proyecto: Proyecto) = projectDao.deleteProject(proyecto)
 
     // ──────────────────────────────────────────────
     // Sessions
     // ──────────────────────────────────────────────
     suspend fun insertSession(session: SesionTiempo) = timeSessionDao.insertSession(session)
     suspend fun deleteSession(session: SesionTiempo) = timeSessionDao.deleteSession(session)
-    fun getSessionsForProject(projectId: String): Flow<List<SesionTiempo>> =
-        timeSessionDao.getSessionsForProject(projectId)
 
     // ──────────────────────────────────────────────
     // Active timer
@@ -78,20 +72,4 @@ class TimeTrackerRepository(
     suspend fun getActiveTimer(): TemporizadorActivo? = activeTimerDao.getActiveTimer()
     suspend fun saveActiveTimer(timer: TemporizadorActivo) = activeTimerDao.saveActiveTimer(timer)
     suspend fun deleteActiveTimer() = activeTimerDao.deleteActiveTimer()
-
-    // ──────────────────────────────────────────────
-    // Offline queue — persisted in Room
-    // ──────────────────────────────────────────────
-    val offlineActionsFlow: Flow<List<OfflineAction>> = offlineActionDao.getAllActions()
-
-    suspend fun enqueueOfflineAction(action: OfflineAction) =
-        offlineActionDao.insertAction(action)
-
-    suspend fun getAllOfflineActions(): List<OfflineAction> =
-        offlineActionDao.getAllActionsOnce()
-
-    suspend fun deleteOfflineAction(action: OfflineAction) =
-        offlineActionDao.deleteAction(action)
-
-    suspend fun clearOfflineQueue() = offlineActionDao.clearAll()
 }
